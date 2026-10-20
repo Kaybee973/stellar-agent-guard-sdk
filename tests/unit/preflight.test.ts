@@ -655,6 +655,12 @@ describe("PreFlightInterceptor simulation cache", () => {
     assert.equal(harness.simulations, 2);
     assert.equal(harness.latestLedgerCalls, 3);
     assert.equal(second, first);
+
+    const stats = interceptor.getCacheStats();
+    assert.equal(stats.hits, 1);
+    assert.equal(stats.misses, 1);
+    assert.equal(stats.size, 1);
+    assert.equal(stats.invalidations, 0);
   });
 
   it("supports ledger-based TTL configuration", async () => {
@@ -687,6 +693,12 @@ describe("PreFlightInterceptor simulation cache", () => {
     await interceptor.check(harness.call);
 
     assert.equal(harness.simulations, 4);
+
+    const stats = interceptor.getCacheStats();
+    assert.equal(stats.hits, 1); // first call: miss, second call: hit (before invalidate), third call: miss (after invalidate)
+    assert.equal(stats.misses, 2); // first and third calls are misses
+    assert.equal(stats.size, 0); // cache cleared
+    assert.equal(stats.invalidations, 1); // one invalidation call cleared one entry
   });
 
   it("invalidates only the requested call when one is supplied", async () => {
@@ -716,6 +728,12 @@ describe("PreFlightInterceptor simulation cache", () => {
     await interceptor.check(harness.call);
 
     assert.equal(harness.simulations, 4);
+
+    const stats = interceptor.getCacheStats();
+    assert.equal(stats.hits, 0);
+    assert.equal(stats.misses, 2);
+    assert.equal(stats.size, 1);
+    assert.equal(stats.invalidations, 0);
   });
 
   it("invalidates when the policy revision changes", async () => {

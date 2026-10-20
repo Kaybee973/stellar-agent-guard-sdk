@@ -419,6 +419,9 @@ export class PreFlightInterceptor {
   private readonly namespace: string;
   private readonly logger: GuardLogger;
   private readonly clock: Clock;
+  private _hits = 0;
+  private _misses = 0;
+  private _invalidations = 0;
 
   constructor(config: PreFlightConfig) {
     this.config = config;
@@ -493,6 +496,7 @@ export class PreFlightInterceptor {
       const cleared = this.cache.size;
       this.cache.clear();
       this.logger.debug("pre-flight cache invalidated", { scope: "all", cleared });
+      this._invalidations += cleared;
       return;
     }
     const prefix = `${this.namespace}:${callFingerprint(call)}:`;
@@ -504,6 +508,7 @@ export class PreFlightInterceptor {
       }
     }
     this.logger.debug("pre-flight cache invalidated", { scope: "call", cleared });
+    this._invalidations += cleared;
   }
 
   /**
@@ -533,10 +538,13 @@ export class PreFlightInterceptor {
             kind: cached.decision.kind,
             ledger: context.ledger,
           });
+          this._hits++;
           return cached.decision;
         }
         this.cache.delete(context.key);
       }
+      // If we have a context but didn't get a valid hit, it's a miss.
+      this._misses++;
     }
     // A bound that fired is a verdict, not a crash: the guard never reached a
     // decision, so the check returns its fail-closed `undetermined` arm (the
@@ -827,6 +835,19 @@ export class PreFlightInterceptor {
       }
     }
     throw new PreFlightUndeterminedError("batch refused by guardrails");
+  }
+
+  /**
+   * Get a snapshot of the cache statistics.
+   * @returns An object with hits, misses, invalidations, and size.
+   */
+  getCacheStats() {
+    return {
+      hits: this._hits,
+      misses: this._misses,
+      invalidations: this._invalidations,
+      size: this.cache.size,
+    };
   }
 }
 

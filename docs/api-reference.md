@@ -23,6 +23,10 @@ The Stellar Agent Guard SDK exposes the following public surface. For the narrat
 - `isRetryableHeartbeatFailure(error): boolean` — True only for the transport failures a bounded retry can plausibly fix: a `BroadcastError`, an `RpcTimeoutError`, a `SimulationError`. A policy refusal and an unclassifiable error are both `false` (issue #340).
 - `DEFAULT_HEARTBEAT_RETRY_OPTIONS` — The retry defaults: `maxAttempts: 1` (retries are opt-in), `baseDelayMs: 250`, `maxDelayMs: 5_000` (issue #340).
 
+#### Operator Runbooks
+
+See the [Agent Key Rotation and Recovery runbook](../concepts/custom-account-signing.md#operator-runbook-agent-key-rotation-and-recovery) for procedures to rotate the agent key of a custom account and recover from rotation failures.
+
 #### Heartbeat input validation (issue #341)
 
 `startHeartbeat()` validates its inputs **before** the scheduler exists, so a misconfiguration can never reach the first beat — and never even reads the grace window from the chain. Each failure names the offending field:
