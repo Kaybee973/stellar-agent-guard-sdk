@@ -123,22 +123,56 @@ export function normalizeU64(value: string): bigint | string {
   return value;
 }
 
-/** Recursively normalise u64 strings in event data. */
-export function normalizeEventData(data: unknown): unknown {
-  if (typeof data === "string") {
-    return normalizeU64(data);
+/** The decoded `GuardEvent.kind` values whose data schema this module knows. */
+export type GuardEventDataKind =
+  | "auth_checked"
+  | "heartbeat"
+  | "initialized"
+  | "frozen"
+  | "unfrozen"
+  | "policy_set"
+  | "policy_revoked"
+  | "unknown";
+
+/**
+ * The documented u64 fields of each known event kind's data payload (#276).
+ *
+ * A u64 is identified by the **event schema**, never by the shape of a string.
+ * Only these top-level fields are converted; every other string — including a
+ * numeric-looking identifier, a nested value, or a timestamp on an event kind
+ * that is not listed — is left exactly as it arrived. An unknown kind has no
+ * documented fields, so its payload is returned untouched.
+ */
+const U64_FIELDS_BY_KIND: Partial<Record<GuardEventDataKind, readonly string[]>> = {
+  // `event_heartbeat` data is `{ at: u64 }` (unix seconds), per docs/event-schema.md.
+  heartbeat: ["at"],
+};
+
+/**
+ * Normalise the documented u64 fields of one event's data payload.
+ *
+ * Conversion is keyed on the decoded event `kind` and the field's documented
+ * type, not on whether a string happens to consist of digits. That keeps the
+ * public event shape stable: a future textual id such as `"12345"` on a kind
+ * whose schema says "string" is not silently turned into a `bigint`.
+ *
+ * The input is never mutated; a shallow copy is returned when a conversion
+ * applies, and the original value is returned unchanged otherwise.
+ */
+export function normalizeEventData(data: unknown, kind: GuardEventDataKind): unknown {
+  const fields = U64_FIELDS_BY_KIND[kind];
+  if (!fields || data === null || typeof data !== "object" || Array.isArray(data)) {
+    return data;
   }
-  if (Array.isArray(data)) {
-    return data.map(normalizeEventData);
+  const source = data as Record<string, unknown>;
+  let result: Record<string, unknown> | null = null;
+  for (const field of fields) {
+    const value = source[field];
+    if (typeof value !== "string" || !/^\d+$/.test(value)) continue;
+    if (result === null) result = { ...source };
+    result[field] = normalizeU64(value);
   }
-  if (data !== null && typeof data === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data)) {
-      result[key] = normalizeEventData(value);
-    }
-    return result;
-  }
-  return data;
+  return result ?? data;
 }
 
 /**

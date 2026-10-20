@@ -14,6 +14,7 @@ import {
   GUARD_EVENT_TOPICS,
   decodeAuthDecision,
   decodeGuardEventXdr,
+  normalizeEventData,
   normalizeU64,
   validateGuardEventXdr,
 } from "../../src/events.ts";
@@ -269,6 +270,45 @@ describe("normalizeU64", () => {
 
   it("preserves non-digit strings", () => {
     assert.equal(normalizeU64("2023-11-20T12:00:00Z"), "2023-11-20T12:00:00Z");
+  });
+});
+
+describe("normalizeEventData (issue #276)", () => {
+  it("normalises the heartbeat's documented `at` u64", () => {
+    assert.deepEqual(normalizeEventData({ at: "1789393232" }, "heartbeat"), {
+      at: 1789393232n,
+    });
+  });
+
+  it("leaves nested values untouched", () => {
+    assert.deepEqual(
+      normalizeEventData({ at: "1789393232", meta: { id: "12345", at: "99" } }, "heartbeat"),
+      { at: 1789393232n, meta: { id: "12345", at: "99" } },
+    );
+  });
+
+  it("keeps numeric-looking identifiers on other kinds as strings", () => {
+    assert.deepEqual(
+      normalizeEventData({ by: "12345", id: "98765" }, "initialized"),
+      { by: "12345", id: "98765" },
+    );
+    assert.deepEqual(
+      normalizeEventData({ reason: "12345" }, "auth_checked"),
+      { reason: "12345" },
+    );
+  });
+
+  it("does not normalise an unknown event kind", () => {
+    assert.deepEqual(normalizeEventData({ at: "1789393232" }, "unknown"), {
+      at: "1789393232",
+    });
+  });
+
+  it("never mutates the input payload", () => {
+    const input = { at: "1789393232" };
+    const output = normalizeEventData(input, "heartbeat");
+    assert.deepEqual(input, { at: "1789393232" });
+    assert.notEqual(output, input);
   });
 });
 

@@ -28,6 +28,7 @@ import {
   InMemoryCursorStore,
   type CursorStore,
   type GuardEvent,
+  type GuardTelemetryHealthSnapshot,
   type GuardUnknownTopic,
 } from "../../src/telemetry.ts";
 
@@ -483,6 +484,174 @@ describe("single active stream (issue #291)", () => {
     assert.equal(listener.stats()?.allowed, 1, "only the active stream records a decision");
     assert.equal(listener.stats()?.blocked, 0);
     await first.return?.();
+  });
+});
+
+describe("listener health snapshot (issue #286)", () => {
+  it("reports a healthy stream and hands out copies", async () => {
+    const page = { events: [rawLedgerEvent(501)], cursor: "cursor-1" };
+    const { server } = scriptedServer([page, page]);
+    const listener = new GuardTelemetryListener({ server, guard: GUARD });
+
+    let during: GuardTelemetryHealthSnapshot | null = null;
+    for await (const events of listener.watch({ pollIntervalMs: 1, startLedger: 500 })) {
+      assert.equal(events.length, 1);
+      during = listener.health();
+      break;
+    }
+
+    assert.ok(during);
+    assert.equal(during.state, "running");
+    assert.equal(during.stream, "watch");
+    assert.ok(during.startedAt);
+    assert.ok(during.lastSuccessfulPollAt);
+    assert.equal(during.lastSuccessfulPollLedger, 500);
+    assert.equal(during.consecutiveFailures, 0);
+    assert.equal(during.lastError, null);
+    assert.deepEqual(during.cursors, { committed: "cursor-1", failedTx: null });
+    assert.deepEqual(during.failedTx, {
+      enabled: false,
+      degraded: false,
+      consecutiveFailures: 0,
+      lastSuccessfulPollAt: null,
+      cursor: null,
+    });
+    assert.equal(during.gaps.length, 0);
+
+    // The snapshot is detached: editing it cannot reach listener state.
+    during.cursors.committed = "tampered";
+    during.failedTx.degraded = true;
+    during.gaps.push({ fromLedger: 1, toLedger: 2, reason: "history_pruned", retainedFromLedger: 3, retainedToLedger: 4 });
+    const after = listener.health();
+    assert.equal(after.cursors.committed, "cursor-1");
+    assert.equal(after.failedTx.degraded, false);
+    assert.deepEqual(after.gaps, []);
+  });
+
+  it("reports recovering while the retry envelope is in progress, then healthy", async () => {
+    let calls = 0;
+    const server = {
+      async getLatestLedger() {
+        return { sequence: 500 };
+      },
+      async getEvents() {
+        calls += 1;
+        if (calls === 1) throw new Error("rpc unavailable");
+        return { events: [rawLedgerEvent(501)], cursor: "cursor-1", latestLedger: 500 };
+      },
+    } as unknown as rpc.Server;
+    const listener = new GuardTelemetryListener({ server, guard: GUARD });
+    const snapshots: GuardTelemetryHealthSnapshot[] = [];
+
+    for await (const events of listener.watch({
+      pollIntervalMs: 1,
+      startLedger: 500,
+      sleep: async () => {
+        // Recovery waits between attempts; inspect the state from there.
+        snapshots.push(listener.health());
+      },
+    })) {
+      assert.equal(events.length, 1);
+      break;
+    }
+
+    const recovering = snapshots.find((snapshot) => snapshot.state === "recovering");
+    assert.ok(recovering, "the retry envelope must be visible as recovering");
+    assert.equal(recovering.consecutiveFailures, 1);
+    assert.equal(recovering.lastSuccessfulPollAt, null);
+
+    const settled = listener.health();
+    assert.equal(settled.state, "stopped");
+    assert.equal(settled.consecutiveFailures, 0, "a successful retry resets the failure count");
+    assert.ok(settled.lastSuccessfulPollAt);
+    assert.equal(settled.cursors.committed, "cursor-1");
+  });
+
+  it("reports aborted when the caller's signal ends the stream", async () => {
+    const page = { events: [rawLedgerEvent(501)], cursor: "cursor-1" };
+    const { server } = scriptedServer([page, page]);
+    const listener = new GuardTelemetryListener({ server, guard: GUARD });
+    const controller = new AbortController();
+
+    for await (const _events of listener.watch({
+      pollIntervalMs: 1,
+      startLedger: 500,
+      signal: controller.signal,
+    })) {
+      controller.abort();
+    }
+
+    const health = listener.health();
+    assert.equal(health.state, "aborted");
+    assert.ok(health.startedAt);
+    assert.equal(health.lastError, null);
+  });
+
+  it("reports a terminal failure with the error and failure count", async () => {
+    const server = {
+      async getLatestLedger() {
+        return { sequence: 500 };
+      },
+      async getEvents(): Promise<never> {
+        throw new Error("rpc unavailable");
+      },
+    } as unknown as rpc.Server;
+    const listener = new GuardTelemetryListener({ server, guard: GUARD });
+    let streamError: unknown = null;
+
+    for await (const _events of listener.watch({
+      pollIntervalMs: 1,
+      startLedger: 500,
+      sleep: async () => {},
+      onStreamError: (error) => {
+        streamError = error;
+      },
+    })) {
+      assert.fail("a terminal stream must not yield");
+    }
+
+    const health = listener.health();
+    assert.equal(health.state, "failed");
+    assert.equal(health.consecutiveFailures, 6, "one initial attempt plus five retries");
+    assert.equal(health.lastSuccessfulPollAt, null);
+    assert.equal(health.cursors.committed, null);
+    assert.ok(streamError instanceof Error);
+    assert.equal(health.lastError?.message, "rpc unavailable");
+    assert.ok(health.lastError?.at);
+  });
+
+  it("records provable coverage gaps without exposing mutable internals", async () => {
+    const server = {
+      async getLatestLedger() {
+        return { sequence: 500 };
+      },
+      async getEvents() {
+        return { events: [], cursor: "cursor-1", latestLedger: 700, oldestLedger: 600 };
+      },
+    } as unknown as rpc.Server;
+    const listener = new GuardTelemetryListener({ server, guard: GUARD });
+    const gaps: unknown[] = [];
+    const controller = new AbortController();
+
+    for await (const _events of listener.watch({
+      pollIntervalMs: 1,
+      startLedger: 100,
+      signal: controller.signal,
+      // The page is empty, so nothing is yielded; stop from the notice itself.
+      onGap: (gap) => {
+        gaps.push(gap);
+        controller.abort();
+      },
+      sleep: async () => {},
+    })) {
+      // No events expected: gap detection does not fabricate any.
+    }
+
+    assert.equal(gaps.length, 1);
+    const health = listener.health();
+    assert.deepEqual(health.gaps, [gaps[0]]);
+    health.gaps[0]!.fromLedger = 999;
+    assert.notEqual(listener.health().gaps[0]!.fromLedger, 999);
   });
 });
 

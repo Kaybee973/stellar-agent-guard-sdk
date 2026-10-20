@@ -65,7 +65,16 @@ export interface VercelAIGuardOptions {
    * `execute` runs (all-or-nothing).
    */
   toContractCalls?: (call: VercelAIToolCallInput) => readonly ContractCall[] | null;
-  /** Observe every decision — the place to wire telemetry. */
+  /**
+   * Observe every decision — the place to wire telemetry.
+   *
+   * The observer is **advisory**: an exception it throws is swallowed, and can
+   * never change whether the guard permits `execute` to run (issue #277).
+   * Reporting a decision is not part of the verdict, so a broken log sink must
+   * not turn an admissible call into a failure nor rescue a blocked one. This
+   * matches the SDK's other failure-isolated callbacks (`onGap`,
+   * `onStep`/`onUnknownTopics`).
+   */
   onDecision?: (call: VercelAIToolCallInput, decision: PreFlightDecision) => void;
 }
 
@@ -92,14 +101,16 @@ export function wrapToolWithGuard<T extends VercelAIToolLike>(
 
       if (contractCalls.length === 1) {
         const decision = await options.interceptor.check(contractCalls[0]!);
-        options.onDecision?.(request, decision);
+        reportDecision(options.onDecision, request, decision);
         if (decision.allowed) return execute(input, toolOptions);
         throw refusalFor(decision, contractCalls[0]!);
       }
 
       // Batch mapping: only an all-admissible batch reaches `execute`.
       const batch = await options.interceptor.checkBatch(contractCalls);
-      for (const verdict of batch.verdicts) options.onDecision?.(request, verdict);
+      for (const verdict of batch.verdicts) {
+        reportDecision(options.onDecision, request, verdict);
+      }
       if (batch.admissible) return execute(input, toolOptions);
 
       const index = batch.verdicts.findIndex((verdict) => !verdict.allowed);
@@ -108,6 +119,27 @@ export function wrapToolWithGuard<T extends VercelAIToolLike>(
       throw refusalFor(refusal, contractCalls[index] ?? contractCalls[0]!);
     },
   };
+}
+
+/**
+ * Report one verdict to the optional observer, isolating its failures (#277).
+ *
+ * `onDecision` exists to feed telemetry and logging, which are best-effort by
+ * nature. Letting a thrown observer escape would make an advisory side-channel
+ * decide whether the tool runs, so it is swallowed here; the guard verdict
+ * alone decides execution.
+ */
+function reportDecision(
+  onDecision: VercelAIGuardOptions["onDecision"],
+  call: VercelAIToolCallInput,
+  decision: PreFlightDecision,
+): void {
+  if (!onDecision) return;
+  try {
+    onDecision(call, decision);
+  } catch {
+    // Advisory observer: a logging/telemetry failure must not change the verdict.
+  }
 }
 
 /** Throw the documented error for a non-admissible verdict. */

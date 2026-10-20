@@ -57,7 +57,7 @@ behaves:
 | `transactionHash` | stream | **Best-effort** | Always `null` on the diagnostic stream — a refusal has no transaction. |
 | `data.at` (heartbeat) | contract payload | **Stable** | Unix seconds. Delivered as a string in JSON, normalised to `bigint` by the SDK to prevent >2^53 precision loss. |
 | `data.by` (admin events) | contract payload | **Stable** | The acting admin address, for `event_initialized` / `event_frozen` / `event_unfrozen` / `event_policy_set` / `event_policy_revoked`. |
-| `data` — any other key | contract / host | **Best-effort** | Not under SDK control. Normalised: strings of pure digits become `bigint`; other strings (e.g. ISO dates) are preserved. |
+| `data` — any other key | contract / host | **Best-effort** | Not under SDK control. Left exactly as delivered: normalisation is schema-driven, so only the documented u64 fields below are converted (issue #276). |
 | `raw` | SDK (opt-in) | **Best-effort** | The undecoded source event, attached only when the decode was asked for it (`includeRaw: true`, issue #94). Committed → the `rpc.Api.EventResponse` object from `getEvents`; diagnostic → the host-shaped object the RPC returned. **Absent** (undefined) otherwise, so the default path retains nothing. Its exact shape is host-supplied and may change in any release; decode the event, use `raw` only as bug-report evidence. |
 | Raw topic list (undecoded XDR / `ScVal` objects) | RPC | **Best-effort** | Host-shaped. Decode with `topicSymbols()` / `decodeAuthDecision()`. |
 | `contractEventsXdr` grouping | RPC | **Best-effort** | An array of *groups*, one per contract — reading it as a flat list silently loses events (see "The capture"). |
@@ -69,6 +69,30 @@ behaves:
 | `serializeEvent()` output | SDK | **Stable** | Canonical JSON line. Fixed key order and normalization policy — see below. Unversioned; legacy records are v0. |
 | `serializeEventRecord()` output | SDK | **Stable within `v: 1`** | Versioned envelope `{ "v": 1, "event": { … } }`. A new envelope version is a documented change; readers must branch on `v`, not assume the current one. |
 | `PollResult.dropped` | SDK | **Append-only** | Per-page rejection counts: `unknownTopic`, `foreignContract`, `missingContractId`, `malformedContractId`. New reasons may be added. |
+
+### Event data normalisation — by field, not by string shape (issue #276)
+
+Only **documented u64 fields of a known event kind** are converted from their
+JSON string form to `bigint`. The rule is a fixed schema lookup, never a
+recursive "this string is all digits, so it must be a number" heuristic:
+
+| event kind | documented u64 field | effect |
+|---|---|---|
+| `heartbeat` | `data.at` | `"1789393232"` → `1789393232n` |
+| every other known kind | — | no conversions |
+| `unknown` | — | payload returned untouched |
+
+Consequences a consumer may rely on:
+
+- A nested value is **not** normalised, even if its field name matches a
+documented one. Only the documented top-level field is converted.
+- A numeric-looking identifier on any other kind (for example a textual id of
+`"12345"`) stays a string, so the public event shape no longer depends on the
+payload's contents.
+- The input payload is never mutated; `normalizeEventData()` returns a shallow
+copy when a conversion applies and the original value otherwise.
+- Already-`bigint` values are returned as they are, so a payload that arrived
+through `scValToNative` is unaffected.
 
 ### Canonical JSON serialization — `serializeEvent()`
 
@@ -848,8 +872,26 @@ committed `getEvents` poll:
   scan resumes before the cursor moves. Across a listener restart the set is
   empty and the tx scan resumes from its cursor — an at-least-once delivery
   semantic, the same one the committed stream has when no cursor was
-  persisted. There is deliberately no cross-restart cursor persistence: the
-  listener's existing contract leaves cursor ownership to the caller.
+  persisted.
+- **Durable cursor (issue #279):** the failed-tx scan has its own
+  `failedTxCursorStore`, persisted independently of the committed stream's
+  `cursorStore`. A restart resumes each stream from its own last confirmed
+  page; one stream advancing (or failing) never moves the other's cursor.
+  The two stores are never used as fallbacks for each other.
+
+#### Retention and replay when no store is present
+
+With no `failedTxCursorStore` (the default), the scan keeps its cursor in
+process-local memory only for the lifetime of the listener object. A fresh
+listener starts the scan at the **current RPC head**, so failed transactions
+that occurred while the process was down are not replayed — they fall outside
+the scan entirely. Once the scan has started, re-invoking `watch()` on the same
+listener resumes from the in-memory cursor. A restart therefore has the same
+at-least-once/lossy character the committed stream has without a
+`cursorStore`: nothing is fabricated for the downtime, and a failure still
+inside the RPC's `getTransactions` retention window is re-surfaced at most once
+because the dedup set starts empty. Persist `failedTxCursorStore` when
+downtime coverage matters.
 - **Error handling:** a malformed diagnostic is skipped, not propagated; a
   failed `getTransactions` call leaves the tx cursor untouched so the page is
   retried, and never corrupts the committed stream (the scan runs inside its
@@ -859,7 +901,9 @@ committed `getEvents` poll:
 
 - **At-least-once, process-local dedup.** After a restart, a failed
   transaction still inside the tx stream's retention window may be re-surfaced
-  once. True exactly-once needs a caller-persisted tx cursor (see above).
+  once. Persisting `failedTxCursorStore` bounds the replay window to the last
+  saved page; deduplication itself remains process-local, so exactly-once
+  delivery is still not promised.
 - **No Soroban ↔ in-ledger retention guarantee.** Soroban RPC prunes
   `getTransactions` history on its own schedule; a listener that is offline
   longer than that window will not see older failures.
