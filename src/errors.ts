@@ -127,11 +127,23 @@ export class BroadcastError extends GuardError {
 
 /** A contract response did not match the API shape the SDK understands. */
 export class ContractResponseError extends GuardError {
+  /** The exact field of the contract response that did not match. */
   readonly field: string;
+  /**
+   * The pipeline stage that read the field, when the failure has one
+   * (`"probe"`, `"simulate"`, `"preflight"`, `"assemble"`).
+   *
+   * Additive: a malformed value is reported with the same typed error
+   * everywhere, and the stage says *where* the bad value was seen — the
+   * distinction a caller needs to tell a bad simulation apart from a bad
+   * policy payload.
+   */
+  readonly stage?: string | undefined;
 
-  constructor(message: string, options: { field: string; cause?: unknown }) {
+  constructor(message: string, options: { field: string; stage?: string; cause?: unknown }) {
     super(message, causeOptions(options.cause));
     this.field = options.field;
+    if (options.stage !== undefined) this.stage = options.stage;
   }
 }
 

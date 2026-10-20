@@ -189,6 +189,7 @@ export {
   type InvokeRetryMetadata,
   type InvokeStepEvent,
   type RetryableInvokeFailure,
+  type SubmissionAcceptedEvent,
 } from "./invoke.ts";
 
 export {
@@ -210,9 +211,11 @@ export {
 } from "./preflight.ts";
 
 export type {
+  BatchStagingSource,
   CheckBatchOptions,
   PolicyRevision,
   PreFlightBatchDecision,
+  PreFlightBatchStaging,
   PreFlightCacheOptions,
   PreFlightCheckOptions,
   PreFlightConfig,
@@ -260,6 +263,7 @@ export {
   mergeGuardEventStreams,
   parseEventRecord,
   serializeEvent,
+  serializeEventLines,
   serializeEventRecord,
   telemetryFromDecision,
   TELEMETRY_EVENT_RECORD_VERSION,
@@ -275,6 +279,8 @@ export {
   type GuardEventRecord,
   type GuardEventStream,
   type GuardTelemetryConfig,
+  type GuardTelemetryCoverage,
+  type GuardTelemetryCoverageStatus,
   type GuardTelemetryGap,
   type GuardTelemetryGapReason,
   type GuardTelemetryHealthSnapshot,
@@ -356,7 +362,10 @@ export {
   type HeartbeatHandle,
   type HeartbeatOptions,
   type HeartbeatRetryOptions,
+  type HeartbeatStopOptions,
+  type HeartbeatStopResult,
   type HeartbeatSubmission,
+  type HeartbeatSubmitContext,
   type SubmitHeartbeatParams,
 } from "./heartbeat.ts";
 

@@ -14,6 +14,8 @@ instance. Reproduce with `npm run test:integration` (requires `.env.phase2`).
 
 **Note** (feat/sdk-295-298-signer-identity-retry-metadata-deadline, PR for #295/#296/#297/#298): Adds signer-identity validation at the `AgentSigner` boundary, public-boundary validation of retry/fee-bump/poll options, structured retry metadata on terminal outcomes, and an optional overall `deadlineMs` shared by retries and polling. None of these changes alter how the guard authorization entry is built or signed, how the enforced simulation runs `__check_auth`, or how a policy verdict is classified: invalid *configuration* is rejected before the pipeline starts, retry metadata is descriptive only, and a spent deadline is reported as a fail-closed timeout (never `allowed`). The five scenarios recorded below are un-cancelled calls with valid options, so their verdicts and state transitions are unchanged; the new validation, metadata and deadline paths are covered by unit tests in `tests/unit/tx.test.ts` and `tests/unit/invoke.test.ts`. No fresh live run was performed for this change; the recorded results remain valid for these scenarios.
 
+**Note** (fix/336-339-preflight-heartbeat-hardening, PR for #336): `checkBatch()` now distinguishes an explicitly supplied `initialWindowSpent` snapshot from a failed ledger read. When a positive SAC transfer needs policy or committed-window state that could not be read, the affected verdicts are `undetermined` and the batch is not reported admissible instead of staging against an assumed zero. This changes only the off-chain batch-staging approximation; an individual `check()` still runs the same probe → sign → enforced `__check_auth` simulation, and the on-chain guard remains authoritative. The five scenarios recorded below use single-call enforcement and are unchanged; the new fail-closed staging paths are covered by mocked-RPC tests in `tests/unit/preflight.test.ts`. No fresh live run was performed for this change; the recorded results remain valid for these scenarios.
+
 ## Instance under test
 
 | | |
@@ -937,6 +939,85 @@ The touched paths are covered without network by `tests/unit/tx.test.ts` and
 `npm run test:browser` proves the root entry still bundles with no `node:*`
 imports. Those are mocks and a static bundle check; they cannot substitute for
 the live run, and this addendum does not claim otherwise.
+
+**A maintainer with `.env.phase2` should run `npm run test:integration` against
+this branch before merge** and replace this addendum with the fresh run output.
+No credentials, deployment or policy change are needed beyond what the suite
+already does.
+
+## Addendum — 2026-10-20 (PR: tx hash before confirmation polling, typed simulation-fee failures, admin cancellation, contracts vocabulary fixture)
+
+Recorded because this PR touches the enforcement path (`src/tx.ts`,
+`src/invoke.ts`, `src/preflight.ts`) and CI's `enforcement-path evidence gate`
+therefore requires this file in the diff.
+
+**It is not accompanied by a fresh live-testnet run**: `.env.phase2` is absent
+from this contributor checkout, so `npm run test:integration` cannot begin its
+scenarios. No fresh Phase-2 transcript is claimed below. The CI gate verifies
+only that this file was touched — not the numbers — and the same limitation
+stated in every addendum above applies here unchanged.
+
+### What the PR changes on the enforcement path
+
+- `src/tx.ts`: the transaction hash is published through an optional
+  `onSubmitted` hook, delivered once, immediately after `sendTransaction`
+  resolves and **before** any status polling. An ambiguous broadcast response —
+  the server answered but named no transaction — is reported as `hash: null`
+  and fails closed with a typed `BroadcastError` instead of being polled for.
+  Separately, the simulation's resource fee is read through the shared exact-u64
+  parser instead of a bare `BigInt(...)`, so a malformed fee is rejected with
+  the SDK's typed `ContractResponseError` rather than a native conversion error.
+- `src/invoke.ts`: `invoke()` accepts the `onSubmitted` hook and forwards it to
+  the broadcast; every outcome that happened after a broadcast carries the hash
+  as `transactionHash`, and an `RpcTimeoutError` raised while polling travels
+  with it. A malformed simulation fee keeps its typed `ContractResponseError`
+  (field `minResourceFee`, stage `assemble`) instead of being flattened into a
+  generic simulation failure.
+- `src/preflight.ts`: the fee parser carries the `preflight` stage, so the
+  fail-closed `undetermined` verdict names where the bad value was read.
+
+Unchanged, deliberately: the authorization preimage and nonce policy, credential
+kinds answered, the probe → sign → enforced-simulation ordering, resource
+assembly for a *well-formed* simulation, submission, block classification, and
+every existing outcome value and detail string. The hash is published *after*
+the broadcast decision the guard already made; the fee parser rejects exactly
+the values the bare `BigInt` conversion rejected anyway, with a typed error
+instead of a native one. The five scenarios recorded above are produced by the
+guard contract during enforced simulation; no line this PR touches participates
+in that, so the recorded results remain valid for them.
+
+The rest of the PR is outside the enforcement path: the administrative helpers
+now forward `signal`/`timeoutMs` (`src/admin.ts`), and the SDK's decoder tests
+read the contracts repo's own `auth_checked` vocabulary fixture instead of a
+copy of the matrix (`src/reasons.ts` gains the contract's newer reason
+symbols). Neither can reach a verdict.
+
+### What did run locally (Node v24.21.0, matching the package's engine)
+
+```text
+npm run typecheck                        # clean
+npm run check:strict-ratchet             # ok
+npm run lint                             # clean
+npm test                                 # 994 tests, 993 pass, 0 fail, 1 skipped
+npm run test:coverage:floor              # ok — invoke.ts 95.95% lines / 87.87% branch / 95.83% funcs
+npm run build                            # clean
+npm run test:smoke                       # 172 named exports resolve via the ESM export map
+npm run test:exports                     # every declared subpath resolves; undeclared paths refused
+npm run check:bundle-size                # within budget
+node --import tsx scripts/check-doc-links.ts   # 38 files, 217 links, no broken links or anchors
+```
+
+The unit suite covers the new behaviour with no network and no credentials:
+`tests/unit/invoke.test.ts` pins the hash being published before the first
+poll, the hash surviving a failed poll, a spent deadline and an ambiguous
+broadcast response, and the typed classification of a malformed fee;
+`tests/unit/tx.test.ts` pins the submission event and the fee parser;
+`tests/unit/preflight.test.ts` pins the fail-closed fee handling;
+`tests/unit/admin.test.ts` pins the forwarded cancellation and timeout options;
+`tests/unit/auth-checked-vocabulary.test.ts` decodes the contracts fixture.
+
+These are mocks and a vendored fixture. They cannot substitute for the live
+run, and this addendum does not claim they do.
 
 **A maintainer with `.env.phase2` should run `npm run test:integration` against
 this branch before merge** and replace this addendum with the fresh run output.
