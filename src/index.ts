@@ -356,6 +356,7 @@ export {
 export {
   DEFAULT_HEARTBEAT_RETRY_OPTIONS,
   HeartbeatBlockedError,
+  HeartbeatDryRunError,
   HeartbeatIntervalError,
   isRetryableHeartbeatFailure,
   startHeartbeat,
