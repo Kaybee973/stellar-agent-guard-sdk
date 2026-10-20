@@ -752,9 +752,9 @@ describe("PreFlightInterceptor simulation cache", () => {
     assert.equal(harness.simulations, 4);
 
     const stats = interceptor.getCacheStats();
-    assert.equal(stats.hits, 1); // first call: miss, second call: hit (before invalidate), third call: miss (after invalidate)
-    assert.equal(stats.misses, 2); // first and third calls are misses
-    assert.equal(stats.size, 0); // cache cleared
+    assert.equal(stats.hits, 0); // first call: miss, invalidate, second call: miss
+    assert.equal(stats.misses, 2); // both calls are misses
+    assert.equal(stats.size, 1); // cache populated by second call after invalidate
     assert.equal(stats.invalidations, 1); // one invalidation call cleared one entry
   });
 

@@ -30,7 +30,7 @@ The Stellar Agent Guard SDK exposes the following public surface. For the narrat
 
 #### Operator Runbooks
 
-See the [Agent Key Rotation and Recovery runbook](../concepts/custom-account-signing.md#operator-runbook-agent-key-rotation-and-recovery) for procedures to rotate the agent key of a custom account and recover from rotation failures.
+See the [Agent Key Rotation and Recovery runbook](concepts/custom-account-signing.md#operator-runbook-agent-key-rotation-and-recovery) for procedures to rotate the agent key of a custom account and recover from rotation failures.
 
 #### Heartbeat input validation (issue #341)
 

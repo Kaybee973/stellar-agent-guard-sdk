@@ -16,8 +16,4 @@ Confirm the `GuardTelemetryListener` is subscribed before the invoke pipeline ru
 
 ## Agent Key Rotation and Recovery
 
-See the [Agent Key Rotation and Recovery runbook](../concepts/custom-account-signing.md#operator-runbook-agent-key-rotation-and-recovery) for procedures to rotate the agent key of a custom account and recover from rotation failures.
-
-## Agent Key Rotation and Recovery
-
-See the [Agent Key Rotation and Recovery runbook](../concepts/custom-account-signing.md#operator-runbook-agent-key-rotation-and-recovery) for procedures to rotate the agent key of a custom account and recover from rotation failures.
+See the [Agent Key Rotation and Recovery runbook](concepts/custom-account-signing.md#operator-runbook-agent-key-rotation-and-recovery) for procedures to rotate the agent key of a custom account and recover from rotation failures.
